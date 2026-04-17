@@ -1,0 +1,227 @@
+# -*- coding: utf-8 -*-
+from flask import Flask, render_template_string
+import subprocess
+import time
+
+app = Flask(__name__)
+
+# ===============================
+# ⚡ CACHE INTELLIGENT
+# ===============================
+CACHE = {}
+CACHE_TIME = {}
+TTL = 300  # 5 minutes
+
+def run_hive(query):
+    now = time.time()
+
+    if query in CACHE and now - CACHE_TIME[query] < TTL:
+        return CACHE[query]
+
+    cmd = f'hive -S -e "USE default; {query}"'
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+    lignes = [
+        l.split("\t")
+        for l in result.stdout.strip().split("\n")
+        if l and not l.startswith("WARNING")
+    ]
+
+    CACHE[query] = lignes
+    CACHE_TIME[query] = now
+
+    return lignes
+
+
+# ===============================
+# 📊 REQUÊTES (INCHANGÉES)
+# ===============================
+
+def query_A():
+    q = "SELECT product_id AS TOP_10_produits_vendus FROM ( SELECT product_id, COUNT(*) AS nbr_produit_vendu FROM order_items GROUP BY product_id ) sub ORDER BY product_id DESC LIMIT 10"
+    return run_hive(q), ["TOP_10_produits_vendus"]
+
+def query_B():
+    q = "SELECT product_id, COUNT(*) AS nombre_de_produit_vendu FROM order_items GROUP BY product_id ORDER BY nombre_de_produit_vendu DESC"
+    return run_hive(q), ["product_id", "nombre_de_produit_vendu"]
+
+def query_C():
+    q = "SELECT SUM(price + freight_value) AS chiffre_affaires_total FROM order_items"
+    return run_hive(q), ["chiffre_affaires_total"]
+
+def query_D():
+    q = "SELECT o.customer_id, SUM(oi.price + oi.freight_value) AS total_depense FROM orders o JOIN order_items oi ON o.order_id = oi.order_id GROUP BY o.customer_id ORDER BY total_depense DESC LIMIT 10"
+    return run_hive(q), ["customer_id", "total_depense"]
+
+def query_E_qty():
+    q = "SELECT product_id, COUNT(*) AS quantite_vendue FROM order_items GROUP BY product_id ORDER BY quantite_vendue DESC LIMIT 10"
+    return run_hive(q), ["product_id", "quantite_vendue"]
+
+def query_E_ca():
+    q = "SELECT product_id, SUM(price) AS ca_produit FROM order_items GROUP BY product_id ORDER BY ca_produit DESC LIMIT 10"
+    return run_hive(q), ["product_id", "ca_produit"]
+
+def query_F():
+    q = "SELECT AVG(DATEDIFF(order_delivered_customer_date, order_estimated_delivery_date)) AS retard_moyen FROM orders WHERE order_delivered_customer_date IS NOT NULL"
+    return run_hive(q), ["retard_moyen"]
+
+def query_G():
+    q = "SELECT AVG(DATEDIFF(order_delivered_customer_date, order_approved_at)) AS delai_moyen_approbation_livraison FROM orders WHERE order_delivered_customer_date IS NOT NULL"
+    return run_hive(q), ["delai_moyen_approbation_livraison"]
+
+def query_H():
+    q = "SELECT customer_id, COUNT(*) AS nb_commandes FROM orders GROUP BY customer_id ORDER BY nb_commandes DESC LIMIT 10"
+    return run_hive(q), ["customer_id", "nb_commandes"]
+
+def query_I():
+    q = "SELECT ROUND(100 * SUM(CASE WHEN order_delivered_customer_date > order_estimated_delivery_date THEN 1 ELSE 0 END) / COUNT(*), 2) AS pourcentage_retard FROM orders WHERE order_delivered_customer_date IS NOT NULL"
+    return run_hive(q), ["pourcentage_retard"]
+
+def query_J():
+    q = "SELECT customer_id, COUNT(DISTINCT DATE(order_purchase_timestamp)) AS nb_jours_commande FROM orders GROUP BY customer_id HAVING nb_jours_commande > 1 ORDER BY nb_jours_commande DESC"
+    return run_hive(q), ["customer_id", "nb_jours_commande"]
+
+def query_K():
+    q = "SELECT o.customer_id, AVG(oi.price + oi.freight_value) AS panier_moyen FROM orders o JOIN order_items oi ON o.order_id = oi.order_id GROUP BY o.customer_id ORDER BY panier_moyen DESC"
+    return run_hive(q), ["customer_id", "panier_moyen"]
+
+def query_L():
+    q = "SELECT product_id, AVG(price - freight_value) AS marge_moyenne FROM order_items GROUP BY product_id ORDER BY marge_moyenne ASC LIMIT 10"
+    return run_hive(q), ["product_id", "marge_moyenne"]
+
+def query_M():
+    q = "SELECT product_id, COUNT(*) AS nb_ventes FROM order_items GROUP BY product_id ORDER BY nb_ventes ASC LIMIT 10"
+    return run_hive(q), ["product_id", "nb_ventes"]
+
+def query_N1():
+    q = "SELECT order_status, COUNT(*) AS nb_commandes FROM orders WHERE order_status IN ('canceled', 'returned') GROUP BY order_status"
+    return run_hive(q), ["order_status", "nb_commandes"]
+
+def query_N2():
+    q = "SELECT order_id, DATEDIFF(order_delivered_customer_date, order_purchase_timestamp) AS delai_total FROM orders ORDER BY delai_total DESC LIMIT 10"
+    return run_hive(q), ["order_id", "delai_total"]
+
+
+# ===============================
+# 🔥 PRÉCHARGEMENT
+# ===============================
+def preload_queries():
+    print("🔥 Préchargement des requêtes Hive...")
+
+    query_A(); query_B(); query_C(); query_D()
+    query_E_qty(); query_E_ca()
+    query_F(); query_G(); query_H(); query_I()
+    query_J(); query_K()
+    query_L(); query_M()
+    query_N1(); query_N2()
+
+    print("✅ Cache prêt !")
+
+
+# ===============================
+# 🖥️ HTML (INCHANGÉ)
+# ===============================
+HTML_TEMPLATE = """ 
+<!-- COLLE ICI TON HTML EXACT SANS MODIFICATION -->
+"""
+
+
+# ===============================
+# 🌐 ROUTES
+# ===============================
+def render_query(active, title, description, sql_text, rows, columns):
+    return render_template_string(HTML_TEMPLATE,
+        active=active, title=title, description=description,
+        sql=sql_text, rows=rows, columns=columns)
+
+@app.route("/")
+def home():
+    return render_template_string(HTML_TEMPLATE, active="home", title="", description="", sql="", rows=[], columns=[])
+
+@app.route("/A")
+def route_A():
+    rows, cols = query_A()
+    return render_query("A","A — Top produits vendus","Top 10 produits", "SQL Hive", rows, cols)
+
+@app.route("/B")
+def route_B():
+    rows, cols = query_B()
+    return render_query("B","B — Quantités vendues","Total ventes","SQL Hive", rows, cols)
+
+@app.route("/C")
+def route_C():
+    rows, cols = query_C()
+    return render_query("C","C — CA total","Somme globale","SQL Hive", rows, cols)
+
+@app.route("/D")
+def route_D():
+    rows, cols = query_D()
+    return render_query("D","D — Top clients","Top dépenses","SQL Hive", rows, cols)
+
+@app.route("/E1")
+def route_E1():
+    rows, cols = query_E_qty()
+    return render_query("E1","E1 — Top quantités","Top ventes","SQL Hive", rows, cols)
+
+@app.route("/E2")
+def route_E2():
+    rows, cols = query_E_ca()
+    return render_query("E2","E2 — Top CA","Top rentables","SQL Hive", rows, cols)
+
+@app.route("/F")
+def route_F():
+    rows, cols = query_F()
+    return render_query("F","F — Retard moyen","Analyse livraison","SQL Hive", rows, cols)
+
+@app.route("/G")
+def route_G():
+    rows, cols = query_G()
+    return render_query("G","G — Délai moyen","Analyse livraison","SQL Hive", rows, cols)
+
+@app.route("/H")
+def route_H():
+    rows, cols = query_H()
+    return render_query("H","H — Commandes/client","Top clients","SQL Hive", rows, cols)
+
+@app.route("/I")
+def route_I():
+    rows, cols = query_I()
+    return render_query("I","I — % retard","Taux retard","SQL Hive", rows, cols)
+
+@app.route("/J")
+def route_J():
+    rows, cols = query_J()
+    return render_query("J","J — Fidélité","Clients réguliers","SQL Hive", rows, cols)
+
+@app.route("/K")
+def route_K():
+    rows, cols = query_K()
+    return render_query("K","K — Panier moyen","Analyse client","SQL Hive", rows, cols)
+
+@app.route("/L")
+def route_L():
+    rows, cols = query_L()
+    return render_query("L","L — Marge faible","Produits faibles","SQL Hive", rows, cols)
+
+@app.route("/M")
+def route_M():
+    rows, cols = query_M()
+    return render_query("M","M — Faible rotation","Produits faibles","SQL Hive", rows, cols)
+
+@app.route("/N1")
+def route_N1():
+    rows, cols = query_N1()
+    return render_query("N1","N1 — Annulations","Statuts","SQL Hive", rows, cols)
+
+@app.route("/N2")
+def route_N2():
+    rows, cols = query_N2()
+    return render_query("N2","N2 — Délais extrêmes","Analyse délais","SQL Hive", rows, cols)
+
+
+# ===============================
+# 🚀 LANCEMENT
+# ===============================
+if __name__ == "__main__":
+    preload_queries()  # 🔥 EXÉCUTÉ UNE FOIS
+    app.run(host="0.0.0.0", port=5000, debug=True)
