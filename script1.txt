@@ -1,0 +1,125 @@
+import customtkinter as ctk
+import subprocess
+import pandas as pd
+import matplotlib.pyplot as plt
+
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+# ===============================
+# 🔥 INITIALISATION HIVE
+# ===============================
+def init_hive():
+    commandes = """
+    CREATE DATABASE IF NOT EXISTS entreprise;
+    USE entreprise;
+
+    CREATE TABLE IF NOT EXISTS employe_ext (
+        id INT,
+        nom STRING,
+        age INT,
+        salaire INT,
+        departement STRING
+    )
+    ROW FORMAT DELIMITED
+    FIELDS TERMINATED BY ',';
+
+    INSERT INTO employe_ext VALUES
+    (1,'Mohamed',30,20000,'RH'),
+    (2,'Manal',24,15000,'BIGDATA'),
+    (3,'Aida',25,16000,'RH'),
+    (4,'Youssef',28,18000,'IT'),
+    (5,'Sara',27,17000,'FINANCE');
+    """
+
+    subprocess.run(f'hive -e "{commandes}"', shell=True)
+
+
+# ===============================
+# 🔥 EXECUTION REQUETE
+# ===============================
+def run_query(query, columns=None, chart=False):
+
+    cmd = f'hive -S -e "USE entreprise; {query}"'
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+    zone_req.delete("1.0", "end")
+    zone_req.insert("end", query)
+
+    zone_res.delete("1.0", "end")
+    zone_res.insert("end", result.stdout)
+
+    # Graphique
+    if chart and columns:
+        rows = [line.split("\t") for line in result.stdout.strip().split("\n") if line]
+        df = pd.DataFrame(rows, columns=columns)
+
+        df[columns[1]] = pd.to_numeric(df[columns[1]])
+
+        plt.clf()
+        df.plot(kind="bar", x=columns[0], y=columns[1], legend=False)
+        plt.title("Graphique")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.show()
+
+
+# ===============================
+# 🔘 BOUTONS
+# ===============================
+def btn_all():
+    run_query("SELECT * FROM employe_ext")
+
+def btn_top():
+    run_query(
+        "SELECT nom, salaire FROM employe_ext ORDER BY salaire DESC LIMIT 5",
+        ["nom", "salaire"],
+        chart=True
+    )
+
+def btn_avg():
+    run_query(
+        "SELECT departement, AVG(salaire) FROM employe_ext GROUP BY departement",
+        ["departement", "avg"],
+        chart=True
+    )
+
+def btn_count():
+    run_query(
+        "SELECT departement, COUNT(*) FROM employe_ext GROUP BY departement",
+        ["departement", "count"],
+        chart=True
+    )
+
+
+# ===============================
+# 🖥️ INTERFACE
+# ===============================
+app = ctk.CTk()
+app.title("Dashboard Hive COMPLET")
+app.geometry("1000x600")
+
+menu = ctk.CTkFrame(app, width=200)
+menu.pack(side="left", fill="y", padx=10, pady=10)
+
+ctk.CTkButton(menu, text="Tous les employés", command=btn_all).pack(pady=10)
+ctk.CTkButton(menu, text="Top salaires", command=btn_top).pack(pady=10)
+ctk.CTkButton(menu, text="Moyenne salaire", command=btn_avg).pack(pady=10)
+ctk.CTkButton(menu, text="Nb employés", command=btn_count).pack(pady=10)
+
+content = ctk.CTkFrame(app)
+content.pack(side="right", expand=True, fill="both", padx=10, pady=10)
+
+ctk.CTkLabel(content, text="Requête SQL").pack()
+zone_req = ctk.CTkTextbox(content, height=80)
+zone_req.pack(fill="x", pady=5)
+
+ctk.CTkLabel(content, text="Résultat").pack()
+zone_res = ctk.CTkTextbox(content)
+zone_res.pack(expand=True, fill="both", pady=5)
+
+# ===============================
+# 🚀 LANCEMENT
+# ===============================
+init_hive()   # 🔥 crée tout automatiquement
+app.mainloop()
