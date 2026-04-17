@@ -1,0 +1,124 @@
+# -*- coding: utf-8 -*-
+from flask import Flask, render_template_string
+import subprocess
+
+app = Flask(__name__)
+
+# ===============================
+# 🔥 INITIALISATION HIVE
+# ===============================
+def init_hive():
+    commandes = """
+    CREATE DATABASE IF NOT EXISTS entreprise;
+    USE entreprise;
+
+    CREATE TABLE IF NOT EXISTS employe_ext (
+        id INT,
+        nom STRING,
+        age INT,
+        salaire INT,
+        departement STRING
+    );
+
+    INSERT INTO employe_ext VALUES
+    (1,'Mohamed',30,20000,'RH'),
+    (2,'Manal',24,15000,'BIGDATA'),
+    (3,'Aida',25,16000,'RH'),
+    (4,'Youssef',28,18000,'IT'),
+    (5,'Sara',27,17000,'FINANCE');
+    """
+    subprocess.run(["hive", "-e", commandes])
+
+
+# ===============================
+# ⚡ CHARGEMENT UNE SEULE FOIS
+# ===============================
+data_cache = None
+
+def load_data():
+    global data_cache
+
+    if data_cache is None:
+        cmd = 'hive -S -e "USE entreprise; SELECT * FROM employe_ext"'
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+        lignes = [l.split("\t") for l in result.stdout.strip().split("\n") if l]
+        data_cache = lignes
+
+    return data_cache
+
+
+# ===============================
+# 🚀 TRAITEMENT RAPIDE PYTHON
+# ===============================
+def get_all():
+    data = load_data()
+    return "\n".join(["\t".join(row) for row in data])
+
+
+def get_top():
+    data = load_data()
+    sorted_data = sorted(data, key=lambda x: int(x[3]), reverse=True)
+    top5 = sorted_data[:5]
+    return "\n".join([f"{row[1]}\t{row[3]}" for row in top5])
+
+
+def get_avg():
+    data = load_data()
+    dep = {}
+
+    for row in data:
+        d = row[4]
+        salaire = int(row[3])
+        if d not in dep:
+            dep[d] = []
+        dep[d].append(salaire)
+
+    result = []
+    for d in dep:
+        avg = sum(dep[d]) / len(dep[d])
+        result.append(f"{d}\t{avg}")
+
+    return "\n".join(result)
+
+
+# ===============================
+# 🖥️ HTML
+# ===============================
+html = """
+<h2>Dashboard Hive</h2>
+
+<button onclick="window.location.href='/all'">Tous les employés</button>
+<button onclick="window.location.href='/top'">Top salaires</button>
+<button onclick="window.location.href='/avg'">Moyenne salaire</button>
+
+<pre>{{result}}</pre>
+"""
+
+
+# ===============================
+# 🌐 ROUTES
+# ===============================
+@app.route("/")
+def home():
+    return render_template_string(html, result="Clique sur un bouton")
+
+@app.route("/all")
+def all_data():
+    return render_template_string(html, result=get_all())
+
+@app.route("/top")
+def top():
+    return render_template_string(html, result=get_top())
+
+@app.route("/avg")
+def avg():
+    return render_template_string(html, result=get_avg())
+
+
+# ===============================
+# 🚀 LANCEMENT
+# ===============================
+if __name__ == "__main__":
+    init_hive()
+    app.run(host="0.0.0.0", port=5000, debug=True)
