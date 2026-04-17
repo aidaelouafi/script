@@ -1,0 +1,405 @@
+# -*- coding: utf-8 -*-
+from flask import Flask, render_template_string
+import subprocess
+import time
+
+app = Flask(__name__)
+
+# ===============================
+# ⚡ CACHE INTELLIGENT
+# ===============================
+CACHE = {}
+CACHE_TIME = {}
+TTL = 300  # 5 minutes
+
+def run_hive(query):
+    now = time.time()
+
+    if query in CACHE and now - CACHE_TIME[query] < TTL:
+        return CACHE[query]
+
+    cmd = f'hive -S -e "USE default; {query}"'
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+    lignes = [
+        l.split("\t")
+        for l in result.stdout.strip().split("\n")
+        if l and not l.startswith("WARNING")
+    ]
+
+    CACHE[query] = lignes
+    CACHE_TIME[query] = now
+
+    return lignes
+
+
+# ===============================
+# 📊 REQUÊTES (INCHANGÉES)
+# ===============================
+
+def query_A():
+    q = "SELECT product_id AS TOP_10_produits_vendus FROM ( SELECT product_id, COUNT(*) AS nbr_produit_vendu FROM order_items GROUP BY product_id ) sub ORDER BY product_id DESC LIMIT 10"
+    return run_hive(q), ["TOP_10_produits_vendus"]
+
+def query_B():
+    q = "SELECT product_id, COUNT(*) AS nombre_de_produit_vendu FROM order_items GROUP BY product_id ORDER BY nombre_de_produit_vendu DESC"
+    return run_hive(q), ["product_id", "nombre_de_produit_vendu"]
+
+def query_C():
+    q = "SELECT SUM(price + freight_value) AS chiffre_affaires_total FROM order_items"
+    return run_hive(q), ["chiffre_affaires_total"]
+
+def query_D():
+    q = "SELECT o.customer_id, SUM(oi.price + oi.freight_value) AS total_depense FROM orders o JOIN order_items oi ON o.order_id = oi.order_id GROUP BY o.customer_id ORDER BY total_depense DESC LIMIT 10"
+    return run_hive(q), ["customer_id", "total_depense"]
+
+def query_E_qty():
+    q = "SELECT product_id, COUNT(*) AS quantite_vendue FROM order_items GROUP BY product_id ORDER BY quantite_vendue DESC LIMIT 10"
+    return run_hive(q), ["product_id", "quantite_vendue"]
+
+def query_E_ca():
+    q = "SELECT product_id, SUM(price) AS ca_produit FROM order_items GROUP BY product_id ORDER BY ca_produit DESC LIMIT 10"
+    return run_hive(q), ["product_id", "ca_produit"]
+
+def query_F():
+    q = "SELECT AVG(DATEDIFF(order_delivered_customer_date, order_estimated_delivery_date)) AS retard_moyen FROM orders WHERE order_delivered_customer_date IS NOT NULL"
+    return run_hive(q), ["retard_moyen"]
+
+def query_G():
+    q = "SELECT AVG(DATEDIFF(order_delivered_customer_date, order_approved_at)) AS delai_moyen_approbation_livraison FROM orders WHERE order_delivered_customer_date IS NOT NULL"
+    return run_hive(q), ["delai_moyen_approbation_livraison"]
+
+def query_H():
+    q = "SELECT customer_id, COUNT(*) AS nb_commandes FROM orders GROUP BY customer_id ORDER BY nb_commandes DESC LIMIT 10"
+    return run_hive(q), ["customer_id", "nb_commandes"]
+
+def query_I():
+    q = "SELECT ROUND(100 * SUM(CASE WHEN order_delivered_customer_date > order_estimated_delivery_date THEN 1 ELSE 0 END) / COUNT(*), 2) AS pourcentage_retard FROM orders WHERE order_delivered_customer_date IS NOT NULL"
+    return run_hive(q), ["pourcentage_retard"]
+
+def query_J():
+    q = "SELECT customer_id, COUNT(DISTINCT DATE(order_purchase_timestamp)) AS nb_jours_commande FROM orders GROUP BY customer_id HAVING nb_jours_commande > 1 ORDER BY nb_jours_commande DESC"
+    return run_hive(q), ["customer_id", "nb_jours_commande"]
+
+def query_K():
+    q = "SELECT o.customer_id, AVG(oi.price + oi.freight_value) AS panier_moyen FROM orders o JOIN order_items oi ON o.order_id = oi.order_id GROUP BY o.customer_id ORDER BY panier_moyen DESC"
+    return run_hive(q), ["customer_id", "panier_moyen"]
+
+def query_L():
+    q = "SELECT product_id, AVG(price - freight_value) AS marge_moyenne FROM order_items GROUP BY product_id ORDER BY marge_moyenne ASC LIMIT 10"
+    return run_hive(q), ["product_id", "marge_moyenne"]
+
+def query_M():
+    q = "SELECT product_id, COUNT(*) AS nb_ventes FROM order_items GROUP BY product_id ORDER BY nb_ventes ASC LIMIT 10"
+    return run_hive(q), ["product_id", "nb_ventes"]
+
+def query_N1():
+    q = "SELECT order_status, COUNT(*) AS nb_commandes FROM orders WHERE order_status IN ('canceled', 'returned') GROUP BY order_status"
+    return run_hive(q), ["order_status", "nb_commandes"]
+
+def query_N2():
+    q = "SELECT order_id, DATEDIFF(order_delivered_customer_date, order_purchase_timestamp) AS delai_total FROM orders ORDER BY delai_total DESC LIMIT 10"
+    return run_hive(q), ["order_id", "delai_total"]
+
+
+# ===============================
+# 🔥 PRÉCHARGEMENT
+# ===============================
+def preload_queries():
+    print("🔥 Préchargement des requêtes Hive...")
+
+    query_A(); query_B(); query_C(); query_D()
+    query_E_qty(); query_E_ca()
+    query_F(); query_G(); query_H(); query_I()
+    query_J(); query_K()
+    query_L(); query_M()
+    query_N1(); query_N2()
+
+    print("✅ Cache prêt !")
+
+
+# ===============================
+# 🖥️ HTML (INCHANGÉ)
+# ===============================
+HTML_TEMPLATE = """ 
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BigData Dashboard — Hive Analytics</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+ 
+        /* Sidebar */
+        .sidebar { position: fixed; left: 0; top: 0; width: 260px; height: 100vh; background: #1a1d2e; border-right: 1px solid #2d3148; overflow-y: auto; z-index: 100; padding-bottom: 20px; }
+        .sidebar-header { padding: 24px 20px 16px; border-bottom: 1px solid #2d3148; }
+        .sidebar-header h1 { font-size: 1.1rem; font-weight: 700; color: #7c6ef0; letter-spacing: 1px; text-transform: uppercase; }
+        .sidebar-header p { font-size: 0.72rem; color: #64748b; margin-top: 4px; }
+        .sidebar-section { padding: 14px 14px 4px; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 1.5px; color: #4a5568; font-weight: 600; }
+        .nav-btn { display: flex; align-items: center; gap: 10px; width: calc(100% - 20px); margin: 3px 10px; padding: 9px 14px; background: transparent; border: 1px solid transparent; border-radius: 8px; color: #94a3b8; font-size: 0.8rem; cursor: pointer; text-align: left; transition: all 0.2s; text-decoration: none; }
+        .nav-btn:hover { background: #252840; border-color: #3d4170; color: #c4b5fd; }
+        .nav-btn.active { background: #2d2f5e; border-color: #7c6ef0; color: #a78bfa; font-weight: 600; }
+        .nav-btn .badge { margin-left: auto; background: #2d3148; color: #6366f1; font-size: 0.62rem; padding: 2px 7px; border-radius: 10px; font-weight: 700; }
+        .nav-letter { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; background: #252840; border-radius: 5px; font-size: 0.72rem; font-weight: 700; color: #6366f1; flex-shrink: 0; }
+ 
+        /* Main */
+        .main { margin-left: 260px; padding: 32px; min-height: 100vh; }
+        .page-header { margin-bottom: 28px; }
+        .page-header h2 { font-size: 1.5rem; font-weight: 700; color: #e2e8f0; }
+        .page-header p { font-size: 0.85rem; color: #64748b; margin-top: 6px; }
+        .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 0.75rem; color: #475569; margin-bottom: 10px; }
+        .breadcrumb a { color: #64748b; text-decoration: none; } .breadcrumb a:hover { color: #a78bfa; }
+        .breadcrumb span { color: #7c6ef0; }
+ 
+        /* Query card */
+        .query-card { background: #1a1d2e; border: 1px solid #2d3148; border-radius: 14px; padding: 24px; margin-bottom: 28px; }
+        .query-card-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; flex-wrap: wrap; gap: 10px; }
+        .query-title { font-size: 1rem; font-weight: 600; color: #c4b5fd; }
+        .query-label { background: #312e81; color: #a78bfa; font-size: 0.7rem; font-weight: 700; padding: 3px 10px; border-radius: 20px; letter-spacing: 0.5px; }
+ 
+        /* SQL block */
+        .sql-block { background: #0d0f1a; border: 1px solid #1e2235; border-radius: 8px; padding: 14px 18px; font-family: 'Courier New', monospace; font-size: 0.78rem; color: #7dd3fc; white-space: pre-wrap; margin-bottom: 18px; line-height: 1.7; }
+ 
+        /* Table */
+        .result-table-wrapper { overflow-x: auto; border-radius: 8px; border: 1px solid #2d3148; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        thead tr { background: #252840; }
+        thead th { padding: 11px 16px; text-align: left; font-weight: 600; color: #a78bfa; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #2d3148; }
+        tbody tr { border-bottom: 1px solid #1e2235; transition: background 0.15s; }
+        tbody tr:hover { background: #1f2236; }
+        tbody tr:last-child { border-bottom: none; }
+        tbody td { padding: 10px 16px; color: #cbd5e1; }
+        tbody td:first-child { color: #94a3b8; font-family: monospace; font-size: 0.78rem; }
+ 
+        /* Home grid */
+        .home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; margin-top: 10px; }
+        .home-card { background: #1a1d2e; border: 1px solid #2d3148; border-radius: 12px; padding: 18px 20px; text-decoration: none; transition: all 0.2s; display: block; }
+        .home-card:hover { border-color: #7c6ef0; background: #1f2240; transform: translateY(-2px); box-shadow: 0 4px 20px rgba(124,110,240,0.15); }
+        .home-card-letter { font-size: 1.4rem; font-weight: 800; color: #7c6ef0; margin-bottom: 8px; }
+        .home-card-title { font-size: 0.82rem; color: #cbd5e1; font-weight: 500; line-height: 1.4; }
+        .home-card-desc { font-size: 0.72rem; color: #475569; margin-top: 5px; }
+ 
+        /* Stats bar */
+        .stats-bar { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; margin-bottom: 32px; }
+        .stat-box { background: #1a1d2e; border: 1px solid #2d3148; border-radius: 10px; padding: 16px 18px; }
+        .stat-box .stat-num { font-size: 1.5rem; font-weight: 800; color: #a78bfa; }
+        .stat-box .stat-label { font-size: 0.72rem; color: #64748b; margin-top: 4px; }
+ 
+        /* Empty */
+        .empty-state { text-align: center; padding: 40px 20px; color: #475569; }
+ 
+        /* Divider */
+        .section-label { font-size: 0.8rem; color: #64748b; margin-bottom: 14px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; }
+ 
+        @media (max-width: 768px) { .sidebar { width: 100%; height: auto; position: relative; } .main { margin-left: 0; padding: 16px; } }
+    </style>
+</head>
+<body>
+ 
+<nav class="sidebar">
+    <div class="sidebar-header">
+        <h1>🐝 Hive Analytics</h1>
+        <p>BigData Dashboard — E-Commerce</p>
+    </div>
+ 
+    <div class="sidebar-section">Ventes &amp; Produits</div>
+    <a href="/A"  class="nav-btn {% if active=='A' %}active{% endif %}"><span class="nav-letter">A</span> Top produits vendus <span class="badge">10</span></a>
+    <a href="/B"  class="nav-btn {% if active=='B' %}active{% endif %}"><span class="nav-letter">B</span> Quantités vendues</a>
+    <a href="/C"  class="nav-btn {% if active=='C' %}active{% endif %}"><span class="nav-letter">C</span> Chiffre d'affaires</a>
+    <a href="/E1" class="nav-btn {% if active=='E1' %}active{% endif %}"><span class="nav-letter">E₁</span> Produits — par quantité</a>
+    <a href="/E2" class="nav-btn {% if active=='E2' %}active{% endif %}"><span class="nav-letter">E₂</span> Produits — par CA</a>
+    <a href="/M"  class="nav-btn {% if active=='M' %}active{% endif %}"><span class="nav-letter">M</span> Faible rotation <span class="badge">⚠</span></a>
+    <a href="/L"  class="nav-btn {% if active=='L' %}active{% endif %}"><span class="nav-letter">L</span> Marge faible <span class="badge">⚠</span></a>
+ 
+    <div class="sidebar-section">Clients</div>
+    <a href="/D"  class="nav-btn {% if active=='D' %}active{% endif %}"><span class="nav-letter">D</span> Top clients dépenses</a>
+    <a href="/H"  class="nav-btn {% if active=='H' %}active{% endif %}"><span class="nav-letter">H</span> Commandes / client</a>
+    <a href="/J"  class="nav-btn {% if active=='J' %}active{% endif %}"><span class="nav-letter">J</span> Clients fidèles</a>
+    <a href="/K"  class="nav-btn {% if active=='K' %}active{% endif %}"><span class="nav-letter">K</span> Panier moyen</a>
+ 
+    <div class="sidebar-section">Livraisons</div>
+    <a href="/F"  class="nav-btn {% if active=='F' %}active{% endif %}"><span class="nav-letter">F</span> Retard moyen</a>
+    <a href="/G"  class="nav-btn {% if active=='G' %}active{% endif %}"><span class="nav-letter">G</span> Délai approbation</a>
+    <a href="/I"  class="nav-btn {% if active=='I' %}active{% endif %}"><span class="nav-letter">I</span> % retard livraison</a>
+    <a href="/N2" class="nav-btn {% if active=='N2' %}active{% endif %}"><span class="nav-letter">N₂</span> Délais extrêmes</a>
+ 
+    <div class="sidebar-section">Statuts</div>
+    <a href="/N1" class="nav-btn {% if active=='N1' %}active{% endif %}"><span class="nav-letter">N₁</span> Annulées / retournées</a>
+ 
+    <div style="height:20px"></div>
+    <a href="/" class="nav-btn" style="color:#64748b;">🏠 Accueil</a>
+</nav>
+ 
+<main class="main">
+    {% if active == 'home' %}
+    <div class="page-header">
+        <h2>📊 BigData Dashboard</h2>
+        <p>Analyse commerciale e-commerce — Apache Hive (HQL)</p>
+    </div>
+    <div class="stats-bar">
+        <div class="stat-box"><div class="stat-num">14</div><div class="stat-label">Requêtes HiveQL</div></div>
+        <div class="stat-box"><div class="stat-num">2</div><div class="stat-label">Tables Hive</div></div>
+        <div class="stat-box"><div class="stat-num">ORC</div><div class="stat-label">Format stockage</div></div>
+        <div class="stat-box"><div class="stat-num">HQL</div><div class="stat-label">Langage</div></div>
+    </div>
+    <div class="section-label">Toutes les analyses</div>
+    <div class="home-grid">
+        <a href="/A"  class="home-card"><div class="home-card-letter">A</div><div class="home-card-title">Top produits vendus</div><div class="home-card-desc">Top 10 par ID produit DESC</div></a>
+        <a href="/B"  class="home-card"><div class="home-card-letter">B</div><div class="home-card-title">Quantités vendues</div><div class="home-card-desc">Par produit, trié décroissant</div></a>
+        <a href="/C"  class="home-card"><div class="home-card-letter">C</div><div class="home-card-title">Chiffre d'affaires total</div><div class="home-card-desc">SUM(price + freight_value)</div></a>
+        <a href="/D"  class="home-card"><div class="home-card-letter">D</div><div class="home-card-title">Top clients</div><div class="home-card-desc">Par total dépensé, Top 10</div></a>
+        <a href="/E1" class="home-card"><div class="home-card-letter">E₁</div><div class="home-card-title">Produits par quantité</div><div class="home-card-desc">Top 10 plus vendus</div></a>
+        <a href="/E2" class="home-card"><div class="home-card-letter">E₂</div><div class="home-card-title">Produits par CA</div><div class="home-card-desc">Top 10 plus rentables</div></a>
+        <a href="/F"  class="home-card"><div class="home-card-letter">F</div><div class="home-card-title">Retard moyen livraison</div><div class="home-card-desc">Jours — livraison vs estimée</div></a>
+        <a href="/G"  class="home-card"><div class="home-card-letter">G</div><div class="home-card-title">Délai approbation</div><div class="home-card-desc">Approbation → livraison (AVG)</div></a>
+        <a href="/H"  class="home-card"><div class="home-card-letter">H</div><div class="home-card-title">Commandes / client</div><div class="home-card-desc">Top 10 clients actifs</div></a>
+        <a href="/I"  class="home-card"><div class="home-card-letter">I</div><div class="home-card-title">% Retard livraison</div><div class="home-card-desc">Taux de retard en %</div></a>
+        <a href="/J"  class="home-card"><div class="home-card-letter">J</div><div class="home-card-title">Clients fidèles</div><div class="home-card-desc">Récurrence > 1 jour distinct</div></a>
+        <a href="/K"  class="home-card"><div class="home-card-letter">K</div><div class="home-card-title">Panier moyen</div><div class="home-card-desc">AVG(price + freight) / client</div></a>
+        <a href="/L"  class="home-card"><div class="home-card-letter">L</div><div class="home-card-title">Marge faible</div><div class="home-card-desc">Bottom 10 — prix - frais</div></a>
+        <a href="/M"  class="home-card"><div class="home-card-letter">M</div><div class="home-card-title">Faible rotation</div><div class="home-card-desc">10 produits les moins vendus</div></a>
+        <a href="/N1" class="home-card"><div class="home-card-letter">N₁</div><div class="home-card-title">Commandes annulées</div><div class="home-card-desc">canceled / returned</div></a>
+        <a href="/N2" class="home-card"><div class="home-card-letter">N₂</div><div class="home-card-title">Délais extrêmes</div><div class="home-card-desc">Top 10 livraisons les plus longues</div></a>
+    </div>
+ 
+    {% else %}
+    <div class="breadcrumb">
+        <a href="/">Accueil</a> ▸ <span>Requête {{ active }}</span>
+    </div>
+    <div class="page-header">
+        <h2>{{ title }}</h2>
+        <p>{{ description }}</p>
+    </div>
+    <div class="query-card">
+        <div class="query-card-header">
+            <div class="query-title">Requête HiveQL</div>
+            <span class="query-label">{{ active }}</span>
+        </div>
+        <div class="sql-block">{{ sql }}</div>
+        {% if rows %}
+        <div class="result-table-wrapper">
+            <table>
+                <thead><tr>{% for col in columns %}<th>{{ col }}</th>{% endfor %}</tr></thead>
+                <tbody>
+                    {% for row in rows %}
+                    <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <p style="font-size:2rem;margin-bottom:8px;">📭</p>
+            <p>Aucun résultat retourné par Hive.</p>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+</main>
+ 
+</body>
+</html>
+"""
+
+
+# ===============================
+# 🌐 ROUTES
+# ===============================
+def render_query(active, title, description, sql_text, rows, columns):
+    return render_template_string(HTML_TEMPLATE,
+        active=active, title=title, description=description,
+        sql=sql_text, rows=rows, columns=columns)
+
+@app.route("/")
+def home():
+    return render_template_string(HTML_TEMPLATE, active="home", title="", description="", sql="", rows=[], columns=[])
+
+@app.route("/A")
+def route_A():
+    rows, cols = query_A()
+    return render_query("A","A — Top produits vendus","Top 10 produits", "SQL Hive", rows, cols)
+
+@app.route("/B")
+def route_B():
+    rows, cols = query_B()
+    return render_query("B","B — Quantités vendues","Total ventes","SQL Hive", rows, cols)
+
+@app.route("/C")
+def route_C():
+    rows, cols = query_C()
+    return render_query("C","C — CA total","Somme globale","SQL Hive", rows, cols)
+
+@app.route("/D")
+def route_D():
+    rows, cols = query_D()
+    return render_query("D","D — Top clients","Top dépenses","SQL Hive", rows, cols)
+
+@app.route("/E1")
+def route_E1():
+    rows, cols = query_E_qty()
+    return render_query("E1","E1 — Top quantités","Top ventes","SQL Hive", rows, cols)
+
+@app.route("/E2")
+def route_E2():
+    rows, cols = query_E_ca()
+    return render_query("E2","E2 — Top CA","Top rentables","SQL Hive", rows, cols)
+
+@app.route("/F")
+def route_F():
+    rows, cols = query_F()
+    return render_query("F","F — Retard moyen","Analyse livraison","SQL Hive", rows, cols)
+
+@app.route("/G")
+def route_G():
+    rows, cols = query_G()
+    return render_query("G","G — Délai moyen","Analyse livraison","SQL Hive", rows, cols)
+
+@app.route("/H")
+def route_H():
+    rows, cols = query_H()
+    return render_query("H","H — Commandes/client","Top clients","SQL Hive", rows, cols)
+
+@app.route("/I")
+def route_I():
+    rows, cols = query_I()
+    return render_query("I","I — % retard","Taux retard","SQL Hive", rows, cols)
+
+@app.route("/J")
+def route_J():
+    rows, cols = query_J()
+    return render_query("J","J — Fidélité","Clients réguliers","SQL Hive", rows, cols)
+
+@app.route("/K")
+def route_K():
+    rows, cols = query_K()
+    return render_query("K","K — Panier moyen","Analyse client","SQL Hive", rows, cols)
+
+@app.route("/L")
+def route_L():
+    rows, cols = query_L()
+    return render_query("L","L — Marge faible","Produits faibles","SQL Hive", rows, cols)
+
+@app.route("/M")
+def route_M():
+    rows, cols = query_M()
+    return render_query("M","M — Faible rotation","Produits faibles","SQL Hive", rows, cols)
+
+@app.route("/N1")
+def route_N1():
+    rows, cols = query_N1()
+    return render_query("N1","N1 — Annulations","Statuts","SQL Hive", rows, cols)
+
+@app.route("/N2")
+def route_N2():
+    rows, cols = query_N2()
+    return render_query("N2","N2 — Délais extrêmes","Analyse délais","SQL Hive", rows, cols)
+
+
+# ===============================
+# 🚀 LANCEMENT
+# ===============================
+if __name__ == "__main__":
+    preload_queries()  # 🔥 EXÉCUTÉ UNE FOIS
+    app.run(host="0.0.0.0", port=5000, debug=True)
