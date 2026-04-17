@@ -1,0 +1,46 @@
+import customtkinter as ctk
+import subprocess
+
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+def executer_requete(requete):
+    cmd = f'hive -S -e "{requete}"'
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+    zone_req.delete("1.0", "end")
+    zone_req.insert("end", requete)
+
+    zone_res.delete("1.0", "end")
+    zone_res.insert("end", result.stdout)
+
+def btn1():
+    executer_requete("SELECT * FROM employe_ext")
+
+def btn2():
+    executer_requete("SELECT nom, salaire FROM employe_ext ORDER BY salaire DESC LIMIT 5")
+
+def btn3():
+    executer_requete("SELECT departement, AVG(salaire) FROM employe_ext GROUP BY departement")
+
+app = ctk.CTk()
+app.geometry("900x600")
+app.title("Dashboard Hive")
+
+menu = ctk.CTkFrame(app, width=200)
+menu.pack(side="left", fill="y")
+
+ctk.CTkButton(menu, text="Tous les employés", command=btn1).pack(pady=10)
+ctk.CTkButton(menu, text="Top salaires", command=btn2).pack(pady=10)
+ctk.CTkButton(menu, text="Moyenne salaire", command=btn3).pack(pady=10)
+
+content = ctk.CTkFrame(app)
+content.pack(side="right", expand=True, fill="both")
+
+zone_req = ctk.CTkTextbox(content, height=80)
+zone_req.pack(fill="x")
+
+zone_res = ctk.CTkTextbox(content)
+zone_res.pack(expand=True, fill="both")
+
+app.mainloop()
