@@ -1,0 +1,91 @@
+import customtkinter as ctk
+from pyhive import hive
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Connexion Hive
+conn = hive.Connection(host='localhost', port=10000, username='hive')
+cursor = conn.cursor()
+
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+# Fonction générique
+def run_query(query, columns, chart=None):
+    zone_req.delete("1.0", "end")
+    zone_req.insert("end", query)
+
+    cursor.execute(query)
+    rows = cursor.fetchall()
+
+    df = pd.DataFrame(rows, columns=columns)
+
+    # Tableau
+    zone_res.delete("1.0", "end")
+    zone_res.insert("end", df.to_string(index=False))
+
+    # Graphique
+    if chart:
+        plt.figure()
+        df.plot(kind=chart["type"], x=chart["x"], y=chart["y"], legend=False)
+        plt.title(chart["title"])
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.show()
+
+
+# 1. Tous les employés
+def all_employees():
+    query = "SELECT id, nom, age, salaire, departement FROM employe_ext"
+    run_query(query,
+              ["id", "nom", "age", "salaire", "departement"])
+
+# 2. Top salaires
+def top_salary():
+    query = "SELECT nom, salaire FROM employe_ext ORDER BY salaire DESC LIMIT 5"
+    run_query(query,
+              ["nom", "salaire"],
+              chart={"type": "bar", "x": "nom", "y": "salaire", "title": "Top Salaires"})
+
+# 3. Moyenne salaire par département
+def avg_dept():
+    query = "SELECT departement, AVG(salaire) FROM employe_ext GROUP BY departement"
+    run_query(query,
+              ["departement", "avg_salaire"],
+              chart={"type": "bar", "x": "departement", "y": "avg_salaire", "title": "Salaire moyen par département"})
+
+# 4. Nombre d’employés par département
+def count_dept():
+    query = "SELECT departement, COUNT(*) FROM employe_ext GROUP BY departement"
+    run_query(query,
+              ["departement", "count"],
+              chart={"type": "pie", "x": "departement", "y": "count", "title": "Répartition employés"})
+
+
+# ================= UI =================
+app = ctk.CTk()
+app.title("Dashboard Employés Hive")
+app.geometry("1000x600")
+
+# Menu gauche
+menu = ctk.CTkFrame(app, width=220)
+menu.pack(side="left", fill="y", padx=10, pady=10)
+
+ctk.CTkButton(menu, text="Tous les employés", command=all_employees).pack(pady=10)
+ctk.CTkButton(menu, text="Top salaires", command=top_salary).pack(pady=10)
+ctk.CTkButton(menu, text="Salaire moyen / dept", command=avg_dept).pack(pady=10)
+ctk.CTkButton(menu, text="Nb employés / dept", command=count_dept).pack(pady=10)
+
+# Zone droite
+content = ctk.CTkFrame(app)
+content.pack(side="right", expand=True, fill="both", padx=10, pady=10)
+
+ctk.CTkLabel(content, text="Requête SQL").pack()
+zone_req = ctk.CTkTextbox(content, height=80)
+zone_req.pack(fill="x", pady=5)
+
+ctk.CTkLabel(content, text="Résultat").pack()
+zone_res = ctk.CTkTextbox(content)
+zone_res.pack(expand=True, fill="both", pady=5)
+
+app.mainloop()
