@@ -1,0 +1,152 @@
+from flask import Flask, render_template_string
+import subprocess
+
+app = Flask(__name__)
+
+# ===============================
+# CACHE EN RAM
+# ===============================
+CACHE = {}
+
+# ===============================
+# EXECUTION HIVE AVEC CACHE
+# ===============================
+def run_hive(query_name, query_sql):
+
+    # si déjà exécuté → retour direct
+    if query_name in CACHE:
+        print("CACHE HIT:", query_name)
+        return CACHE[query_name]
+
+    print("EXECUTION HIVE:", query_name)
+
+    cmd = f'hive -S -e "USE default; {query_sql}"'
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+    rows = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line and not line.startswith("WARNING"):
+            rows.append(line.split("\t"))
+
+    CACHE[query_name] = rows
+    return rows
+
+
+# ===============================
+# QUERIES HIVE
+# ===============================
+QUERIES = {
+
+    "A": ("Top produits vendus",
+          "SELECT product_id, COUNT(*) FROM order_items GROUP BY product_id ORDER BY COUNT(*) DESC LIMIT 10"),
+
+    "B": ("Quantités vendues",
+          "SELECT product_id, COUNT(*) FROM order_items GROUP BY product_id ORDER BY COUNT(*) DESC"),
+
+    "C": ("Chiffre d'affaires total",
+          "SELECT SUM(price + freight_value) FROM order_items"),
+
+    "D": ("Top clients",
+          "SELECT o.customer_id, SUM(oi.price + oi.freight_value) "
+          "FROM orders o JOIN order_items oi ON o.order_id = oi.order_id "
+          "GROUP BY o.customer_id ORDER BY 2 DESC LIMIT 10"),
+
+    "E1": ("Top produits quantité",
+           "SELECT product_id, COUNT(*) FROM order_items GROUP BY product_id ORDER BY COUNT(*) DESC LIMIT 10"),
+
+    "E2": ("Top produits CA",
+           "SELECT product_id, SUM(price) FROM order_items GROUP BY product_id ORDER BY SUM(price) DESC LIMIT 10"),
+
+    "F": ("Retard moyen livraison",
+          "SELECT AVG(DATEDIFF(order_delivered_customer_date, order_estimated_delivery_date)) FROM orders"),
+
+    "G": ("Délai approbation",
+          "SELECT AVG(DATEDIFF(order_delivered_customer_date, order_approved_at)) FROM orders"),
+
+    "H": ("Commandes par client",
+          "SELECT customer_id, COUNT(*) FROM orders GROUP BY customer_id ORDER BY COUNT(*) DESC LIMIT 10"),
+
+    "I": ("% commandes en retard",
+          "SELECT ROUND(100 * SUM(CASE WHEN order_delivered_customer_date > order_estimated_delivery_date THEN 1 ELSE 0 END)/COUNT(*),2) FROM orders"),
+
+    "J": ("Clients fidèles",
+          "SELECT customer_id, COUNT(DISTINCT DATE(order_purchase_timestamp)) "
+          "FROM orders GROUP BY customer_id HAVING COUNT(*) > 1"),
+
+    "K": ("Panier moyen",
+          "SELECT o.customer_id, AVG(oi.price + oi.freight_value) "
+          "FROM orders o JOIN order_items oi ON o.order_id = oi.order_id "
+          "GROUP BY o.customer_id"),
+
+    "L": ("Produits marge faible",
+          "SELECT product_id, AVG(price - freight_value) "
+          "FROM order_items GROUP BY product_id ORDER BY 2 ASC LIMIT 10"),
+
+    "M": ("Produits faible rotation",
+          "SELECT product_id, COUNT(*) FROM order_items GROUP BY product_id ORDER BY COUNT(*) ASC LIMIT 10"),
+
+    "N1": ("Commandes annulées",
+           "SELECT order_status, COUNT(*) FROM orders "
+           "WHERE order_status IN ('canceled','returned') GROUP BY order_status"),
+
+    "N2": ("Délais extrêmes",
+           "SELECT order_id, DATEDIFF(order_delivered_customer_date, order_purchase_timestamp) "
+           "FROM orders ORDER BY 2 DESC LIMIT 10"),
+}
+
+# ===============================
+# HTML SIMPLE
+# ===============================
+HTML = """
+<h1>Dashboard Hive</h1>
+
+{% for key, val in queries.items() %}
+    <p>
+        <a href="/query/{{key}}">Requête {{key}} - {{val[0]}}</a>
+        |
+        <a href="/refresh/{{key}}">Refresh</a>
+    </p>
+{% endfor %}
+
+<hr>
+
+{% if rows %}
+<table border="1">
+{% for row in rows %}
+<tr>
+{% for cell in row %}
+<td>{{cell}}</td>
+{% endfor %}
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+"""
+
+# ===============================
+# ROUTES
+# ===============================
+@app.route("/")
+def home():
+    return render_template_string(HTML, queries=QUERIES, rows=None)
+
+
+@app.route("/query/<name>")
+def query(name):
+    title, sql = QUERIES[name]
+    rows = run_hive(name, sql)
+    return render_template_string(HTML, queries=QUERIES, rows=rows)
+
+
+@app.route("/refresh/<name>")
+def refresh(name):
+    CACHE.pop(name, None)
+    return f"Cache supprimé pour {name}. <a href='/'>Retour</a>"
+
+
+# ===============================
+# START
+# ===============================
+if __name__ == "__main__":
+    app.run(debug=True)
